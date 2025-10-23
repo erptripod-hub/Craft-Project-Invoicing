@@ -98,29 +98,55 @@ frappe.ui.form.on('Sales Invoice', {
 		}
 	},
 
+	// validate: function (frm) {
+	// 	if (frm.doc.items && frm.doc.items.length > 0 && frm.doc.items[0].sales_order) {
+	// 		frappe.call({
+	// 			method: "craft_project_invoicing.events.sales_invoice.get_so_detail",
+	// 			args: {
+	// 				"sales_order": frm.doc.items[0].sales_order,
+	// 				"invoice_per": frm.doc.custom_invoice_percentage
+	// 			},
+	// 			callback: function (r) {
+	// 				if (r.message) {
+	// 					$.each(frm.doc.items, function (k, i) {
+	// 						if (r.message[i.so_detail]) {
+	// 							frappe.model.set_value(i.doctype, i.name, "custom_so_qty", r.message[i.so_detail].so_qty);
+	// 							if (r.message[i.so_detail].qty) {
+	// 								frappe.model.set_value(i.doctype, i.name, "qty", r.message[i.so_detail].qty);
+	// 							}
+	// 						}
+	// 					});
+	// 				}
+	// 			}
+	// 		});
+	// 	}
+	// },
+
 	validate: function (frm) {
-		if (frm.doc.items && frm.doc.items.length > 0 && frm.doc.items[0].sales_order) {
-			frappe.call({
-				method: "craft_project_invoicing.events.sales_invoice.get_so_detail",
-				args: {
-					"sales_order": frm.doc.items[0].sales_order,
-					"invoice_per": frm.doc.custom_invoice_percentage
-				},
-				callback: function (r) {
-					if (r.message) {
-						$.each(frm.doc.items, function (k, i) {
-							if (r.message[i.so_detail]) {
-								frappe.model.set_value(i.doctype, i.name, "custom_so_qty", r.message[i.so_detail].so_qty);
-								if (r.message[i.so_detail].qty) {
-									frappe.model.set_value(i.doctype, i.name, "qty", r.message[i.so_detail].qty);
-								}
+	if (frm.doc.items && frm.doc.items.length > 0 && frm.doc.items[0].sales_order) {
+		frappe.call({
+			method: "craft_project_invoicing.events.sales_invoice.get_so_detail",
+			args: {
+				"sales_order": frm.doc.items[0].sales_order,
+				"invoice_per": frm.doc.custom_invoice_percentage,
+				"items": frm.doc.items
+			},
+			callback: function (r) {
+				if (r.message) {
+					$.each(frm.doc.items, function (k, i) {
+						if (r.message[i.so_detail]) {
+							frappe.model.set_value(i.doctype, i.name, "custom_so_qty", r.message[i.so_detail].so_qty);
+							if (r.message[i.so_detail].qty) {
+								frappe.model.set_value(i.doctype, i.name, "qty", r.message[i.so_detail].qty);
 							}
-						});
-					}
+						}
+					});
 				}
-			});
-		}
-	},
+			}
+		});
+	}
+}
+
 });
 
 var set_taxes = function(frm, sales_order) {

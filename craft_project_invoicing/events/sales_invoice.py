@@ -202,23 +202,135 @@ def on_cancel(doc, method):
 					})
 
 
+
+
+
+
+
+# @frappe.whitelist()
+# def get_so_detail(sales_order, invoice_per=None):
+# 	if not sales_order:
+# 		return
+
+# 	if invoice_per and isinstance(invoice_per, str):
+# 		invoice_per = flt(invoice_per)
+
+# 	so_doc = frappe.get_doc("Sales Order", sales_order)
+# 	so_details = {}
+# 	if so_doc and so_doc.items:
+# 		for item in so_doc.items:
+# 			detail_dict = frappe._dict({
+# 				"so_detail": item.name,
+# 				"so_qty": item.qty,
+# 				"qty": item.qty * (invoice_per/100) if invoice_per else None
+# 			})
+# 			so_details[item.name] = detail_dict
+
+# 	return so_details if so_details else None
+
+
 @frappe.whitelist()
-def get_so_detail(sales_order, invoice_per=None):
+def get_so_detail(sales_order, invoice_per=None, items=None):
 	if not sales_order:
 		return
 
+	from frappe.utils import flt
+	import json
+
+	# Handle cases where invoice_per or items come as strings
 	if invoice_per and isinstance(invoice_per, str):
 		invoice_per = flt(invoice_per)
+	if items and isinstance(items, str):
+		items = json.loads(items)
+
+	# Map of item_code or so_detail -> custom_invoice_percentage (if set)
+	item_percentage_map = {}
+	if items:
+		for i in items:
+			# Convert to float if provided
+			item_percentage_map[i.get("so_detail")] = flt(i.get("custom_invoice_percentage")) if i.get("custom_invoice_percentage") else None
 
 	so_doc = frappe.get_doc("Sales Order", sales_order)
 	so_details = {}
+
 	if so_doc and so_doc.items:
 		for item in so_doc.items:
+			# Priority: item-specific percentage > parent percentage
+			item_invoice_per = item_percentage_map.get(item.name) or invoice_per
+
 			detail_dict = frappe._dict({
 				"so_detail": item.name,
 				"so_qty": item.qty,
-				"qty": item.qty * (invoice_per/100) if invoice_per else None
+				"qty": item.qty * (item_invoice_per / 100) if item_invoice_per else None
 			})
 			so_details[item.name] = detail_dict
 
 	return so_details if so_details else None
+
+
+def before_submit(doc, method):
+    # 1️⃣ Skip if current invoice is for Advance
+    if len(doc.items) == 1 and doc.items[0].item_code == "Advance":
+        return
+
+    # 2️⃣ Ensure linked Sales Order exists
+    if not doc.sales_order:
+        return
+
+    # 3️⃣ Fetch all previously submitted invoices for the same Sales Order (excluding current)
+    previous_invoices = frappe.get_all(
+        "Sales Invoice",
+        filters={
+            "sales_order": doc.sales_order,
+            "docstatus": 1,
+            "name": ["!=", doc.name]
+        },
+        fields=["name", "custom_invoice_percentage", "grand_total"],
+        order_by="posting_date asc, creation asc"  # oldest → newest
+    )
+
+    valid_invoices = []
+
+    # 4️⃣ Filter out Advance invoices
+    for inv in previous_invoices:
+        inv_doc = frappe.get_doc("Sales Invoice", inv.name)
+        if len(inv_doc.items) == 1 and inv_doc.items[0].item_code == "Advance":
+            continue
+        valid_invoices.append(inv_doc)  # store full doc for tax calculations
+
+    # 5️⃣ Add valid invoices to child table
+    if valid_invoices:
+        doc.custom_sales_invoice_child = []  # clear existing rows
+
+        for v in valid_invoices:
+            # Calculate advance, retention, and VAT totals from taxes
+            advance_total = 0
+            retention_total = 0
+            vat_total = 0
+
+            for tax in v.taxes:
+                is_advance = getattr(tax, "is_advance", 0)
+                is_retention = getattr(tax, "is_retention", 0)
+
+                if is_advance:
+                    advance_total += abs(tax.tax_amount or 0)
+                elif is_retention:
+                    retention_total += abs(tax.tax_amount or 0)
+                else:
+                    vat_total += abs(tax.tax_amount or 0)
+
+            # Append all required data to child table
+            doc.append("custom_sales_invoice_child", {
+                "sales_invoice": v.name,
+                "previous_progress": v.custom_invoice_percentage or 0,
+                "invoice_total": v.grand_total or 0,
+                "advance_total": advance_total,
+                "retention_total": retention_total,
+                "vat_total": vat_total
+            })
+
+        frappe.msgprint(f"Added {len(valid_invoices)} previous invoice(s) details including tax info.")
+    else:
+        frappe.msgprint("No valid previous invoices found (only Advance invoices exist).")
+
+

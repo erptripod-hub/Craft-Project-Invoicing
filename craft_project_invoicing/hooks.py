@@ -53,6 +53,9 @@ fixtures = [
 						 # Sales Taxes and Charges
 						 "Sales Taxes and Charges-is_advance",
 						 "Sales Taxes and Charges-is_retention",
+                         "Sales Invoice Item-custom_invoice_percentage",
+                         "Sales Invoice-custom_section_break_z58an",
+                         "Sales Invoice-custom_sales_invoice_child",
 					 )
 			 ]
 		]
@@ -187,6 +190,7 @@ doc_events = {
 	"Sales Invoice": {
 		"on_submit": "craft_project_invoicing.events.sales_invoice.on_submit",
 		"on_cancel": "craft_project_invoicing.events.sales_invoice.on_cancel",
+        "before_submit": "craft_project_invoicing.events.sales_invoice.before_submit",
 	}
 }
 
