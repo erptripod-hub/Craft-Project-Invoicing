@@ -231,41 +231,39 @@ def on_cancel(doc, method):
 
 @frappe.whitelist()
 def get_so_detail(sales_order, invoice_per=None, items=None):
-	if not sales_order:
-		return
+    if not sales_order:
+        return
 
-	from frappe.utils import flt
-	import json
+    from frappe.utils import flt
+    import json
 
-	# Handle cases where invoice_per or items come as strings
-	if invoice_per and isinstance(invoice_per, str):
-		invoice_per = flt(invoice_per)
-	if items and isinstance(items, str):
-		items = json.loads(items)
+    # Handle JSON and data types
+    if invoice_per and isinstance(invoice_per, str):
+        invoice_per = flt(invoice_per)
+    if items and isinstance(items, str):
+        items = json.loads(items)
 
-	# Map of item_code or so_detail -> custom_invoice_percentage (if set)
-	item_percentage_map = {}
-	if items:
-		for i in items:
-			# Convert to float if provided
-			item_percentage_map[i.get("so_detail")] = flt(i.get("custom_invoice_percentage")) if i.get("custom_invoice_percentage") else None
+    # Map each Sales Order Item → specific invoice percentage
+    item_percentage_map = {}
+    if items:
+        for i in items:
+            item_percentage_map[i.get("so_detail")] = flt(i.get("custom_invoice_percentage")) or invoice_per
 
-	so_doc = frappe.get_doc("Sales Order", sales_order)
-	so_details = {}
+    so_doc = frappe.get_doc("Sales Order", sales_order)
+    so_details = {}
 
-	if so_doc and so_doc.items:
-		for item in so_doc.items:
-			# Priority: item-specific percentage > parent percentage
-			item_invoice_per = item_percentage_map.get(item.name) or invoice_per
+    for item in so_doc.items:
+        item_invoice_per = item_percentage_map.get(item.name) or invoice_per
+        if not item_invoice_per:
+            continue
 
-			detail_dict = frappe._dict({
-				"so_detail": item.name,
-				"so_qty": item.qty,
-				"qty": item.qty * (item_invoice_per / 100) if item_invoice_per else None
-			})
-			so_details[item.name] = detail_dict
+        so_details[item.name] = {
+            "so_detail": item.name,
+            "so_qty": item.qty,
+            "qty": flt(item.qty) * (flt(item_invoice_per) / 100)
+        }
 
-	return so_details if so_details else None
+    return so_details
 
 
 def before_submit(doc, method):

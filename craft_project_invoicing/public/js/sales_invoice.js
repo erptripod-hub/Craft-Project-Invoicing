@@ -122,30 +122,51 @@ frappe.ui.form.on('Sales Invoice', {
 	// 	}
 	// },
 
-	validate: function (frm) {
-	if (frm.doc.items && frm.doc.items.length > 0 && frm.doc.items[0].sales_order) {
-		frappe.call({
-			method: "craft_project_invoicing.events.sales_invoice.get_so_detail",
-			args: {
-				"sales_order": frm.doc.items[0].sales_order,
-				"invoice_per": frm.doc.custom_invoice_percentage,
-				"items": frm.doc.items
-			},
-			callback: function (r) {
-				if (r.message) {
-					$.each(frm.doc.items, function (k, i) {
-						if (r.message[i.so_detail]) {
-							frappe.model.set_value(i.doctype, i.name, "custom_so_qty", r.message[i.so_detail].so_qty);
-							if (r.message[i.so_detail].qty) {
-								frappe.model.set_value(i.doctype, i.name, "qty", r.message[i.so_detail].qty);
-							}
-						}
-					});
-				}
-			}
-		});
-	}
-}
+	validate: function(frm) {
+        if (!frm.doc.items || frm.doc.items.length === 0) return;
+
+        const parent_per = frm.doc.custom_invoice_percentage;
+
+        // Apply parent percentage to only inherited rows (manual flag == 0 or null)
+        if (parent_per !== undefined && parent_per !== null && parent_per !== "") {
+            let rows_to_update = [];
+
+            frm.doc.items.forEach(row => {
+                // treat null/undefined/0/"" as inherited unless manually marked
+                const is_manual = row.custom_invoice_percentage_manual ? true : false;
+                if (!is_manual) {
+                    // set the child's percentage to parent and mark as inherited (manual = 0)
+                    frappe.model.set_value(row.doctype, row.name, "custom_invoice_percentage", parent_per);
+                    frappe.model.set_value(row.doctype, row.name, "custom_invoice_percentage_manual", 0);
+                    rows_to_update.push(row);
+                }
+            });
+
+            // Recalculate qtys for updated rows in one call
+            if (rows_to_update.length && rows_to_update[0].sales_order) {
+                frappe.call({
+                    method: "craft_project_invoicing.events.sales_invoice.get_so_detail",
+                    args: {
+                        sales_order: rows_to_update[0].sales_order,
+                        // we can pass full items to server, server will pick percentages from the passed items
+                        items: rows_to_update
+                    },
+                    callback: function(r) {
+                        if (r.message) {
+                            rows_to_update.forEach(i => {
+                                const detail = r.message[i.so_detail];
+                                if (detail) {
+                                    frappe.model.set_value(i.doctype, i.name, "custom_so_qty", detail.so_qty);
+                                    frappe.model.set_value(i.doctype, i.name, "qty", detail.qty);
+                                }
+                            });
+                        }
+                    }
+                });
+            }
+        }
+    }
+
 
 });
 
@@ -160,3 +181,34 @@ var set_taxes = function(frm, sales_order) {
 		}
 	})
 };
+
+
+frappe.ui.form.on("Sales Invoice Item", {
+    custom_invoice_percentage: function(frm, cdt, cdn) {
+        const row = locals[cdt][cdn];
+        if (!row) return;
+
+        // If user changed this field (manual edit), mark it manual = 1
+        // If they cleared it intentionally (empty), mark it inherited (0)
+        const isManualValue = row.custom_invoice_percentage !== null && row.custom_invoice_percentage !== undefined && row.custom_invoice_percentage !== "";
+        frappe.model.set_value(cdt, cdn, "custom_invoice_percentage_manual", isManualValue ? 1 : 0);
+
+        // Recalculate this row by calling backend with only this row
+        if (row.sales_order) {
+            frappe.call({
+                method: "craft_project_invoicing.events.sales_invoice.get_so_detail",
+                args: {
+                    sales_order: row.sales_order,
+                    items: [row]
+                },
+                callback: function(r) {
+                    if (r.message && r.message[row.so_detail]) {
+                        const detail = r.message[row.so_detail];
+                        frappe.model.set_value(cdt, cdn, "custom_so_qty", detail.so_qty);
+                        frappe.model.set_value(cdt, cdn, "qty", detail.qty);
+                    }
+                }
+            });
+        }
+    }
+});
