@@ -3,7 +3,7 @@ name = "craft_project_invoicing"
 authors = [
     { name = "craftinteractive.ae", email = "craftinteractive.ae@gmail.com"}
 ]
-description = craft_project_invoicing"
+description = "craft_project_invoicing"
 requires-python = ">=3.10"
 readme = "README.md"
 dynamic = ["version"]
