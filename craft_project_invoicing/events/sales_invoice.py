@@ -332,3 +332,98 @@ def before_submit(doc, method):
         frappe.msgprint("No valid previous invoices found (only Advance invoices exist).")
 
 
+
+
+# ---------------------------------------------------------------------------
+# Sales Order billing percentage
+#
+# ERPNext computes Sales Order.per_billed by mapping each Sales Invoice Item
+# back to a Sales Order Item via so_detail, and caps each line's billed_amt at
+# that line's own amount. That model does not fit percentage / milestone
+# invoicing, where a claim may sit on a single line (Advance, Retention) or on
+# a line carrying zero value. The capped lines are discarded and the order
+# under-reports how much has been billed, so per_billed is recomputed here from
+# invoice totals instead:
+#
+#     per_billed = SUM(base_net_total of submitted Sales Invoices for the SO)
+#                  / Sales Order.base_net_total * 100
+#
+# An invoice is linked to the order if either the header field `sales_order`
+# points at it or any of its item rows do; each invoice is counted once. Credit
+# notes (is_return = 1) carry a negative base_net_total, so summing straight
+# over them already nets the returned value back out, which is correct. This
+# mirrors the manual backfill routine, so a document produces the same figure
+# whether corrected in bulk or recalculated live here.
+# ---------------------------------------------------------------------------
+
+
+def get_linked_sales_orders(doc):
+	orders = set()
+	if doc.get("sales_order"):
+		orders.add(doc.get("sales_order"))
+	for row in doc.get("items") or []:
+		if row.get("sales_order"):
+			orders.add(row.get("sales_order"))
+	return orders
+
+
+def get_invoiced_amount(sales_order):
+	conditions = ["exists (select 1 from `tabSales Invoice Item` sii where sii.parent = si.name and sii.sales_order = %(so)s)"]
+	if frappe.db.has_column("Sales Invoice", "sales_order"):
+		conditions.insert(0, "si.sales_order = %(so)s")
+	return frappe.db.sql(
+		"""
+		select ifnull(sum(si.base_net_total), 0)
+		from `tabSales Invoice` si
+		where si.docstatus = 1 and ({0})
+		""".format(" or ".join(conditions)),
+		{"so": sales_order},
+	)[0][0] or 0
+
+
+def recalculate_so_billing(sales_order):
+	so = frappe.db.get_value(
+		"Sales Order", sales_order, ["name", "base_net_total", "docstatus"], as_dict=True
+	)
+	if not so or so.docstatus != 1 or not flt(so.base_net_total):
+		return
+
+	invoiced = flt(get_invoiced_amount(sales_order))
+
+	item_total = frappe.db.sql(
+		"select ifnull(sum(amount), 0) from `tabSales Order Item` where parent = %s",
+		sales_order,
+	)[0][0] or 0
+
+	if flt(item_total):
+		frappe.db.sql(
+			"""
+			update `tabSales Order Item`
+			set billed_amt = round(amount / %(item_total)s * %(invoiced)s, 2)
+			where parent = %(so)s
+			""",
+			{"item_total": flt(item_total), "invoiced": invoiced, "so": sales_order},
+		)
+
+	frappe.db.set_value(
+		"Sales Order",
+		sales_order,
+		"per_billed",
+		flt(invoiced / flt(so.base_net_total) * 100, 2),
+		update_modified=False,
+	)
+
+
+def update_so_billing(doc, method=None):
+	"""Hooked to Sales Invoice on_submit / on_cancel. Runs after ERPNext's own
+	update_billing_status, overwriting the capped value with one derived from
+	invoice totals. A reporting field must never block submit/cancel, so any
+	failure is logged and swallowed."""
+	for sales_order in get_linked_sales_orders(doc):
+		try:
+			recalculate_so_billing(sales_order)
+		except Exception:
+			frappe.log_error(
+				title="Failed to update billing percentage for {0}".format(sales_order),
+				message=frappe.get_traceback(),
+			)

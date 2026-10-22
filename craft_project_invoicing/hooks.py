@@ -188,8 +188,14 @@ doc_events = {
 		"validate": "craft_project_invoicing.events.sales_order.validate",
 	},
 	"Sales Invoice": {
-		"on_submit": "craft_project_invoicing.events.sales_invoice.on_submit",
-		"on_cancel": "craft_project_invoicing.events.sales_invoice.on_cancel",
+		"on_submit": [
+			"craft_project_invoicing.events.sales_invoice.on_submit",
+			"craft_project_invoicing.events.sales_invoice.update_so_billing",
+		],
+		"on_cancel": [
+			"craft_project_invoicing.events.sales_invoice.on_cancel",
+			"craft_project_invoicing.events.sales_invoice.update_so_billing",
+		],
         "before_submit": "craft_project_invoicing.events.sales_invoice.before_submit",
 	}
 }
